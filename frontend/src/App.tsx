@@ -18,8 +18,30 @@ interface QuestionGroup {
   status: QuestionStatus
 }
 
+interface ChatMessage {
+  id: string
+  display_name: string
+  text: string
+}
+
+interface AuthStatus {
+  configured: boolean
+  status: 'ready' | 'connecting' | 'connected' | 'reconnecting' | 'disconnected' | 'authentication_required'
+  channel_login: string | null
+  channel_name: string | null
+  stream: {
+    id: string
+    title: string
+    game_name: string
+    viewer_count: number
+    started_at: string
+  } | null
+  tracking: boolean
+  error: string | null
+}
+
 interface DashboardState {
-  messages: unknown[]
+  messages: ChatMessage[]
   topics: Topic[]
   questions: QuestionGroup[]
   spotlight: {
@@ -36,12 +58,17 @@ const emptyState: DashboardState = {
   spotlight: { question_id: null, question_text: null, viewer_count: 0 },
   updated_at: new Date().toISOString(),
 }
+const emptyAuth: AuthStatus = {
+  configured: false, status: 'authentication_required', channel_login: null, channel_name: null,
+  stream: null, tracking: false, error: null,
+}
 
 function App() {
   const [state, setState] = useState<DashboardState>(emptyState)
   const [isLoading, setIsLoading] = useState(true)
   const [busyAction, setBusyAction] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [auth, setAuth] = useState<AuthStatus>(emptyAuth)
 
   const request = useCallback(async (path: string, options?: RequestInit) => {
     const response = await fetch(`${apiBaseUrl}${path}`, {
@@ -51,19 +78,45 @@ function App() {
     return (await response.json()) as DashboardState
   }, [])
 
-  useEffect(() => {
-    request('/api/state').then(setState)
-      .catch(() => setError('Backend is offline. Start FastAPI on port 8000.'))
-      .finally(() => setIsLoading(false))
+  const refresh = useCallback(async () => {
+    try {
+      const [nextState, nextAuth] = await Promise.all([
+        request('/api/state'),
+        fetch(`${apiBaseUrl}/api/auth/status`).then((response) => {
+          if (!response.ok) throw new Error(`Request failed (${response.status})`)
+          return response.json() as Promise<AuthStatus>
+        }),
+      ])
+      setState(nextState); setAuth(nextAuth); setError(null)
+    } catch { setError('Backend is offline. Start FastAPI on port 8000.') }
+    finally { setIsLoading(false) }
   }, [request])
 
-  const runSimulation = async (scenario: string) => {
-    setBusyAction(`simulate-${scenario}`); setError(null)
+  useEffect(() => {
+    void refresh()
+    const timer = window.setInterval(() => void refresh(), 2000)
+    return () => window.clearInterval(timer)
+  }, [refresh])
+
+  const connectTwitch = () => { window.location.href = `${apiBaseUrl}/api/auth/twitch/login` }
+
+  const disconnectTwitch = async () => {
+    setBusyAction('disconnect'); setError(null)
     try {
-      setState(await request('/api/dev/simulate', {
-        method: 'POST', body: JSON.stringify({ scenario }),
-      }))
-    } catch { setError('Could not load the demo conversation.') }
+      const response = await fetch(`${apiBaseUrl}/api/auth/twitch/disconnect`, { method: 'POST' })
+      if (!response.ok) throw new Error(`Request failed (${response.status})`)
+      setAuth(await response.json() as AuthStatus)
+    } catch { setError('Could not disconnect Twitch.') }
+    finally { setBusyAction(null) }
+  }
+
+  const trackStream = async () => {
+    setBusyAction('track'); setError(null)
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/twitch/track`, { method: 'POST' })
+      if (!response.ok) throw new Error(`Request failed (${response.status})`)
+      setAuth(await response.json() as AuthStatus)
+    } catch { setError('Could not start chat tracking. Confirm the channel is still live.') }
     finally { setBusyAction(null) }
   }
 
@@ -74,14 +127,10 @@ function App() {
     finally { setBusyAction(null) }
   }
 
-  const clearSpotlight = async () => {
-    setBusyAction('clear'); setError(null)
-    try { setState(await request('/api/spotlight', { method: 'DELETE' })) }
-    catch { setError('Could not clear the spotlight.') }
-    finally { setBusyAction(null) }
-  }
-
   const activeQuestions = state.questions.filter((q) => q.status === 'new' || q.status === 'pinned')
+  const trackingInterrupted = Boolean(
+    auth.stream && auth.tracking && ['reconnecting', 'disconnected', 'authentication_required'].includes(auth.status),
+  )
 
   return (
     <div className="app-shell">
@@ -91,33 +140,46 @@ function App() {
           <div><strong>ChatPulse</strong><span>Audience intelligence</span></div>
         </div>
         <div className="stream-status">
-          <div className="channel-avatar">CP</div>
-          <div><span className="eyebrow">DEMO CHANNEL</span><strong>ChatPulse Live</strong></div>
-          <span className={`status-dot ${error ? 'offline' : ''}`} />
-          <span className="connection-label">{error ? 'Offline' : 'Connected'}</span>
+          <div className="channel-avatar">{auth.channel_name?.slice(0, 2).toUpperCase() ?? 'CP'}</div>
+          <div><span className="eyebrow">TWITCH CHANNEL</span><strong>{auth.channel_name ?? 'Not connected'}</strong></div>
+          <span className={`status-dot ${auth.status === 'ready' ? 'standby' : auth.status !== 'connected' ? 'offline' : ''}`} />
+          <span className="connection-label">{auth.status.replace('_', ' ')}</span>
         </div>
       </header>
 
-      <section className="control-strip" aria-label="Demo controls">
+      <section className="control-strip" aria-label="Twitch connection controls">
         <div><span className="live-pulse" /><strong>{state.messages.length} messages</strong><span>in the current analysis window</span></div>
         <div className="scenario-buttons">
-          <span>Simulate:</span>
-          {['mixed', 'questions', 'quiet'].map((scenario) => (
-            <button className="ghost-button" disabled={busyAction !== null} key={scenario}
-              onClick={() => runSimulation(scenario)} type="button">
-              {busyAction === `simulate-${scenario}` ? 'Loading…' : scenario}
-            </button>
-          ))}
+          <button className="ghost-button" disabled={!auth.configured || busyAction !== null} onClick={connectTwitch} type="button">
+            {auth.channel_name ? 'Twitch connected' : auth.configured ? 'Connect Twitch' : 'Add Twitch credentials'}
+          </button>
+          <button className="primary-button connect-button" disabled={!auth.channel_name || auth.tracking || busyAction !== null} onClick={trackStream} type="button">
+            {busyAction === 'track' ? 'Finding stream…' : auth.tracking ? 'Tracking stream' : 'Track streaming'}
+          </button>
+          {auth.channel_name && <button className="ghost-button" disabled={busyAction !== null} onClick={disconnectTwitch} type="button">Disconnect</button>}
         </div>
       </section>
+      {auth.error && <div className="error-banner" role="alert">Twitch: {auth.error}</div>}
       {error && <div className="error-banner" role="alert">{error}</div>}
+
+      {trackingInterrupted && (
+        <div className="connection-modal-backdrop" role="alertdialog" aria-modal="true" aria-labelledby="connection-modal-title">
+          <div className="connection-modal">
+            <div className="connection-modal-icon">!</div>
+            <span className="eyebrow">TWITCH CONNECTION LOST</span>
+            <h2 id="connection-modal-title">Live chat tracking interrupted</h2>
+            <p>ChatPulse lost its connection while your Twitch stream is still live. Automatic reconnection is in progress.</p>
+            <div className="reconnect-progress"><span /><strong>Reconnecting…</strong></div>
+          </div>
+        </div>
+      )}
 
       <main className="dashboard-grid">
         <section className="panel topic-panel">
           <PanelHeading eyebrow="LIVE ANALYSIS" title="Topic radar" subtitle="What your audience is talking about" icon="⌁" />
           <div className="panel-content topic-list">
             {isLoading ? <EmptyState title="Connecting…" copy="Reading the latest audience state." />
-              : state.topics.length === 0 ? <EmptyState title="No topics yet" copy="Run a simulation to fill the radar." />
+              : state.topics.length === 0 ? <EmptyState title="Waiting for chat" copy="Connect Twitch, then send a message in the channel." />
               : state.topics.map((topic, index) => (
                 <article className="topic-card" key={topic.id}>
                   <div className="topic-rank">0{index + 1}</div>
@@ -133,7 +195,7 @@ function App() {
           <PanelHeading eyebrow="PRIORITIZED" title="Question queue" subtitle="Grouped by intent and audience interest" icon="?" count={activeQuestions.length} />
           <div className="panel-content question-list">
             {isLoading ? <EmptyState title="Finding questions…" copy="The queue will update after analysis." />
-              : activeQuestions.length === 0 ? <EmptyState title="No questions detected" copy="Try the mixed or questions simulation." />
+              : activeQuestions.length === 0 ? <EmptyState title="No questions detected" copy="Questions from real Twitch chat will appear here." />
               : activeQuestions.map((question) => (
                 <article className={`question-card ${question.status === 'pinned' ? 'is-pinned' : ''}`} key={question.id}>
                   <div className="question-topline">
@@ -157,24 +219,20 @@ function App() {
         </section>
 
         <section className="panel spotlight-panel">
-          <PanelHeading eyebrow="OBS OUTPUT" title="Live spotlight" subtitle="Preview what viewers see on stream" icon="◉" />
-          <div className="panel-content spotlight-content">
-            <div className={`overlay-preview ${state.spotlight.question_id ? 'is-live' : ''}`}>
-              <div className="preview-grid" />
-              {state.spotlight.question_text ? (
-                <div className="spotlight-card"><span>CHATPULSE · AUDIENCE SPOTLIGHT</span>
-                  <blockquote>“{state.spotlight.question_text}”</blockquote>
-                  <p>{state.spotlight.viewer_count} viewers are asking</p>
-                </div>
-              ) : (
-                <div className="empty-preview"><div className="preview-icon">◈</div><strong>Spotlight is clear</strong><span>Pin a question to preview it here</span></div>
-              )}
-            </div>
-            <div className="spotlight-footer">
-              <div><span className={state.spotlight.question_id ? 'on-air-dot' : 'idle-dot'} /><span>{state.spotlight.question_id ? 'Live on overlay' : 'Overlay ready'}</span></div>
-              <button className="danger-button" disabled={!state.spotlight.question_id || busyAction !== null}
-                onClick={clearSpotlight} type="button">Clear spotlight</button>
-            </div>
+          <PanelHeading eyebrow="TWITCH" title="Live stream" subtitle="Your current Twitch broadcast" icon="▶" />
+          <div className="panel-content live-player-content">
+            {auth.stream && auth.channel_login ? (
+              <iframe
+                allow="autoplay; fullscreen"
+                allowFullScreen
+                className="twitch-player"
+                src={`https://player.twitch.tv/?channel=${encodeURIComponent(auth.channel_login)}&parent=${encodeURIComponent(window.location.hostname)}&autoplay=false&muted=true`}
+                title={`${auth.channel_name ?? auth.channel_login} live stream`}
+              />
+            ) : (
+              <div className="live-player-empty"><div>▶</div><strong>No live stream</strong><span>Connect Twitch and start broadcasting to see the video here.</span></div>
+            )}
+            {auth.stream && <div className="live-player-meta"><span className="live-badge">LIVE</span><div><strong>{auth.stream.title}</strong><span>{auth.stream.game_name} · {auth.stream.viewer_count} viewers</span></div></div>}
           </div>
         </section>
       </main>

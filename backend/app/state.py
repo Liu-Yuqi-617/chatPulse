@@ -52,6 +52,43 @@ class StateStore:
                 updated_at=self._updated_at,
             )
 
+    def ingest_message(self, message: ChatMessage) -> DashboardState:
+        """Add a real Twitch message while keeping the live state bounded."""
+        now = datetime.now(UTC)
+        with self._lock:
+            if any(item.id == message.id for item in self._messages):
+                return self.snapshot_unlocked()
+
+            self._messages.append(message)
+            self._messages = self._messages[-500:]
+
+            # Until the LLM pipeline is enabled, expose real questions directly so
+            # the streamer can already use the queue and spotlight end to end.
+            if "?" in message.text or "？" in message.text:
+                question = QuestionGroup(
+                    id=f"question-{message.id}",
+                    representative_question=message.text,
+                    message_ids=[message.id],
+                    unique_viewer_count=1,
+                    priority_score=1.0,
+                    last_seen_at=message.timestamp,
+                )
+                self._questions.insert(0, question)
+                self._questions = self._questions[:100]
+
+            self._topics = [
+                Topic(
+                    id="topic-live-chat",
+                    title="Live chat activity",
+                    summary="Messages received directly from the connected Twitch channel.",
+                    message_ids=[item.id for item in self._messages[-30:]],
+                    message_count=min(len(self._messages), 30),
+                    updated_at=now,
+                )
+            ]
+            self._updated_at = now
+            return self.snapshot_unlocked()
+
     def simulate(self, scenario: str) -> DashboardState:
         if scenario not in SCENARIOS:
             raise ValueError(f"Unknown scenario: {scenario}")

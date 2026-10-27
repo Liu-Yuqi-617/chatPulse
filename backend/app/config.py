@@ -12,10 +12,11 @@ class Settings(BaseSettings):
     twitch_client_id: str = ""
     twitch_client_secret: str = ""
     twitch_redirect_uri: str = "http://localhost:8000/api/auth/twitch/callback"
+    twitch_scopes: str = "user:read:chat"
     openai_api_key: str = ""
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=("../.env", ".env"),
         env_file_encoding="utf-8",
         extra="ignore",
     )

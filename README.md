@@ -73,3 +73,20 @@ npm run build
 
 Copy `.env.example` to `.env` before adding local credentials. Never commit `.env`.
 
+## Connect Twitch
+
+Register the exact callback URL from `TWITCH_REDIRECT_URI` in the Twitch Developer Console, then set:
+
+```env
+TWITCH_CLIENT_ID=your-client-id
+TWITCH_CLIENT_SECRET=your-client-secret
+TWITCH_REDIRECT_URI=http://localhost:8000/api/auth/twitch/callback
+TWITCH_SCOPES=user:read:chat
+```
+
+Restart the backend after changing environment variables. Open the Dashboard and select **Connect Twitch**. When the authorized channel goes live, select **Track streaming** beside the connect control. ChatPulse verifies the live stream, subscribes to `channel.chat.message` over EventSub WebSocket, and reconnects automatically. A blocking warning dialog appears if chat tracking drops while the stream is still live.
+
+The right-hand Dashboard panel embeds the authorized channel's current broadcast with the official Twitch player. It is a streamer-side live preview only; the previous OBS/Spotlight output is not part of the current MVP.
+
+For production, replace the callback and origins with their deployed HTTPS URLs in both the hosting environment and Twitch Developer Console. OAuth tokens are currently held in backend memory, so a backend restart requires reconnecting Twitch.
+
