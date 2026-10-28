@@ -6,17 +6,21 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 
 from app.config import get_settings
+from app.analysis import AnalysisService
 from app.models import DashboardState, QuestionStatus, SimulationRequest
 from app.state import SCENARIOS, store
 from app.twitch import TwitchService
 
 settings = get_settings()
 twitch = TwitchService(settings, store)
+analysis = AnalysisService(settings, store)
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    analysis.start()
     yield
+    await analysis.stop()
     await twitch.disconnect()
 
 app = FastAPI(
@@ -43,7 +47,25 @@ async def health() -> dict[str, str]:
         "service": settings.app_name,
         "version": settings.app_version,
         "environment": settings.environment,
+        "ai": "configured" if analysis.configured else "not_configured",
     }
+
+
+@app.post("/api/analysis/run", tags=["analysis"])
+async def run_analysis() -> dict[str, bool | str | None]:
+    if not analysis.configured:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Qwen API configuration is missing",
+        )
+    try:
+        updated = await analysis.analyze_latest(force=True)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Qwen analysis failed",
+        ) from exc
+    return {"updated": updated, "model": settings.soclaas_model, "error": analysis.error}
 
 
 @app.get("/api/auth/twitch/login", tags=["authentication"])

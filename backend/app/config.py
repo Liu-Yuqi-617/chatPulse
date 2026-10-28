@@ -13,7 +13,14 @@ class Settings(BaseSettings):
     twitch_client_secret: str = ""
     twitch_redirect_uri: str = "http://localhost:8000/api/auth/twitch/callback"
     twitch_scopes: str = "user:read:chat"
+    # OPENAI_API_KEY is retained for the existing OpenAI-compatible gateway config.
     openai_api_key: str = ""
+    qwen_api_key: str = ""
+    soclaas_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    soclaas_model: str = "qwen-plus"
+    llm_analysis_interval_seconds: int = 30
+    llm_analysis_window_messages: int = 100
+    llm_request_timeout_seconds: int = 90
 
     model_config = SettingsConfigDict(
         env_file=("../.env", ".env"),

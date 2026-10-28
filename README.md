@@ -86,6 +86,12 @@ TWITCH_SCOPES=user:read:chat
 
 Restart the backend after changing environment variables. Open the Dashboard and select **Connect Twitch**. When the authorized channel goes live, select **Track streaming** beside the connect control. ChatPulse verifies the live stream, subscribes to `channel.chat.message` over EventSub WebSocket, and reconnects automatically. A blocking warning dialog appears if chat tracking drops while the stream is still live.
 
+## Enable LLM chat analysis
+
+Configure `QWEN_API_KEY` (or the existing compatible gateway credential), `SOCLAAS_BASE_URL`, and `SOCLAAS_MODEL` in the root `.env`. ChatPulse batches the latest Twitch messages every 30 seconds and calls Qwen through its OpenAI-compatible Chat Completions endpoint. The model only decides which individual messages are valid audience questions and summarizes up to three grounded topics; it does not merge, rewrite, rank, or answer questions. Configure batching with `LLM_ANALYSIS_INTERVAL_SECONDS` and `LLM_ANALYSIS_WINDOW_MESSAGES`; `LLM_REQUEST_TIMEOUT_SECONDS` defaults to 90 seconds for slower inference gateways.
+
+For a manual demo run after messages have arrived, call `POST /api/analysis/run`. If the key is absent or an API call fails, Twitch ingestion and the existing dashboard continue running.
+
 The right-hand Dashboard panel embeds the authorized channel's current broadcast with the official Twitch player. It is a streamer-side live preview only; the previous OBS/Spotlight output is not part of the current MVP.
 
 For production, replace the callback and origins with their deployed HTTPS URLs in both the hosting environment and Twitch Developer Console. OAuth tokens are currently held in backend memory, so a backend restart requires reconnecting Twitch.

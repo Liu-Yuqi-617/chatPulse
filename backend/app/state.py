@@ -89,6 +89,36 @@ class StateStore:
             self._updated_at = now
             return self.snapshot_unlocked()
 
+    def apply_analysis(
+        self, topics: list[Topic], questions: list[QuestionGroup]
+    ) -> DashboardState:
+        """Atomically replace AI results while preserving streamer workflow state."""
+        now = datetime.now(UTC)
+        with self._lock:
+            previous = {item.id: item for item in self._questions}
+            for question in questions:
+                old = previous.get(question.id)
+                if old is not None:
+                    question.status = old.status
+
+            pinned = next(
+                (item for item in questions if item.status == QuestionStatus.PINNED),
+                None,
+            )
+            self._topics = topics
+            self._questions = questions
+            if pinned is not None:
+                self._spotlight = Spotlight(
+                    question_id=pinned.id,
+                    question_text=pinned.representative_question,
+                    viewer_count=pinned.unique_viewer_count,
+                    updated_at=now,
+                )
+            elif self._spotlight.question_id is not None:
+                self._spotlight = Spotlight(updated_at=now)
+            self._updated_at = now
+            return self.snapshot_unlocked()
+
     def simulate(self, scenario: str) -> DashboardState:
         if scenario not in SCENARIOS:
             raise ValueError(f"Unknown scenario: {scenario}")
